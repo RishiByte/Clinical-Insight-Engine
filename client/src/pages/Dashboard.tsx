@@ -257,6 +257,8 @@ export default function Dashboard() {
                     <div className="mt-4 space-y-4">
                       <div className="space-y-2">
                         <label className={labelClass}>Gender</label>
+                        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1">
+                          {["Male", "Female"].map((g) => (
                         <div className={`grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1 transition-all duration-200 ${errors.gender ? "ring-2 ring-red-500 bg-red-50/30" : ""}`}>
                           {["Male", "Female", "Other"].map((g) => (
                             <label key={g} className="flex-1 cursor-pointer">
@@ -295,8 +297,6 @@ export default function Dashboard() {
                           <option value="No Info">No Info</option>
                           <option value="current">current</option>
                           <option value="former">former</option>
-                          <option value="ever">ever</option>
-                          <option value="not current">not current</option>
                         </select>
                         {errors.smokingHistory && <p className="text-sm text-red-600 mt-1">{errors.smokingHistory.message}</p>}
                       </div>
