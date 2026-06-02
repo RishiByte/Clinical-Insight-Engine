@@ -11,6 +11,7 @@ import { sendVerificationCode } from "./email";
 declare module "express-session" {
   interface SessionData {
     user?: {
+      id: string;
       email: string;
       name: string;
     };
@@ -552,13 +553,34 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * Express middleware that blocks requests from users whose email
- * has not been verified. In this implementation, a valid session
- * implies a verified email.
+ * Express middleware that blocks requests from users whose email has not been verified.
  */
-export function requireVerified(req: Request, res: Response, next: NextFunction) {
-  if (req.session?.user) {
+export async function requireVerified(req: Request, res: Response, next: NextFunction) {
+  const sessionUser = req.session?.user;
+
+  if (!sessionUser) {
+    return res.status(401).json({ message: "Authentication required." });
+  }
+
+  if (sessionUser.id === "dev" && sessionUser.email === process.env.DEV_CLINICIAN_EMAIL) {
     return next();
   }
-  return res.status(401).json({ message: "Verification required." });
+
+  try {
+    const db = getDb();
+    const [user] = await db
+      .select({ emailVerified: users.emailVerified })
+      .from(users)
+      .where(eq(users.id, sessionUser.id))
+      .limit(1);
+
+    if (user?.emailVerified) {
+      return next();
+    }
+
+    return res.status(403).json({ message: "Email verification required." });
+  } catch (error) {
+    console.error("Email verification check failed:", error);
+    return res.status(500).json({ message: "Unable to verify account status." });
+  }
 }
