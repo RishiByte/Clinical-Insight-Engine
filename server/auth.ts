@@ -5,7 +5,7 @@ import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { eq, and, gte } from "drizzle-orm";
 import { storage } from "./storage";
 import { getDb } from "./db";
-import { users, emailVerificationTokens } from "@shared/schema";
+import { users, emailVerificationTokens, loginAuditLogs } from "@shared/schema";
 import { sendVerificationCode } from "./email";
 // Extend express-session to include user data
 declare module "express-session" {
@@ -175,6 +175,24 @@ async function establishAuthenticatedSession(
   await saveSession(req);
 }
 
+async function logLoginAudit(
+  req: Request,
+  status: string,
+  userId?: string | null,
+): Promise<void> {
+  try {
+    const db = getDb();
+    await db.insert(loginAuditLogs).values({
+      userId: userId ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+      loginStatus: status,
+    });
+  } catch (error) {
+    console.warn("Failed to write login audit log:", error);
+  }
+}
+
 /**
  * Creates an authentication router with login, register, logout, and session-check endpoints.
  *
@@ -289,19 +307,19 @@ export function createAuthRouter(): Router {
     const devEmail = process.env.DEV_CLINICIAN_EMAIL || "";
     const devPassword = process.env.DEV_CLINICIAN_PASSWORD || "";
 
-    let userFullName: string | null = null;
+    let authenticatedUser: { id: string | null; name: string } | null = null;
 
     if (email === devEmail && password === devPassword) {
-      userFullName = "Dr. Smith";
+      authenticatedUser = { id: null, name: "Dr. Smith" };
     } else {
       // Check in-memory store (legacy)
       const registeredUser = registeredUsers.get(email);
       if (registeredUser && verifyPassword(password, registeredUser.passwordHash)) {
-        userFullName = registeredUser.fullName;
+        authenticatedUser = { id: null, name: registeredUser.fullName };
       }
 
       // Also check DB
-      if (!userFullName) {
+      if (!authenticatedUser) {
         try {
           const db = getDb();
           const [dbUser] = await db
@@ -311,26 +329,28 @@ export function createAuthRouter(): Router {
             .limit(1);
 
           if (dbUser && verifyPassword(password, dbUser.passwordHash)) {
-            userFullName = dbUser.fullName;
+            authenticatedUser = { id: dbUser.id, name: dbUser.fullName };
           }
         } catch (_err) {
           // DB not available — fall back to in-memory only
           console.warn("DB unavailable for login, using in-memory only.");
           const registeredUser = registeredUsers.get(email);
           if (registeredUser && verifyPassword(password, registeredUser.passwordHash)) {
-            userFullName = registeredUser.fullName;
+            authenticatedUser = { id: null, name: registeredUser.fullName };
           }
         }
       }
     }
 
 
-    if (!userFullName) {
+    if (!authenticatedUser) {
+      await logLoginAudit(req, "failed");
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
     const otp = generateOtp();
     pendingOtps.set(email, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
+    await logLoginAudit(req, "otp_sent", authenticatedUser.id);
 
     // In production, send OTP via email. For development, return it in the response.
     logDevOtp(email, otp);
@@ -347,21 +367,25 @@ export function createAuthRouter(): Router {
     const email = (req.body?.email ?? "").trim().toLowerCase();
 
     if (!email || !otp) {
+      await logLoginAudit(req, "otp_failed");
       return res.status(400).json({ message: "Email and OTP are required." });
     }
 
     const pending = pendingOtps.get(email);
 
     if (!pending) {
+      await logLoginAudit(req, "otp_failed");
       return res.status(400).json({ message: "No pending verification found for this email." });
     }
 
     if (Date.now() > pending.expiresAt) {
       pendingOtps.delete(email);
+      await logLoginAudit(req, "otp_expired");
       return res.status(400).json({ message: "OTP has expired. Please sign in again." });
     }
 
     if (pending.otp !== otp) {
+      await logLoginAudit(req, "otp_failed");
       return res.status(401).json({ message: "Invalid OTP. Please try again." });
     }
 
@@ -391,8 +415,10 @@ export function createAuthRouter(): Router {
 
     try {
       await establishAuthenticatedSession(req, { id, email, name });
+      await logLoginAudit(req, "success", id === "dev" ? null : id);
     } catch (error) {
       console.error("Session regeneration failed:", error);
+      await logLoginAudit(req, "session_failed", id === "dev" ? null : id);
       return res.status(500).json({ message: "Failed to establish session." });
     }
 
@@ -417,10 +443,12 @@ export function createAuthRouter(): Router {
       const { email, code } = req.body || {};
 
       if (!email || !code) {
+        await logLoginAudit(req, "email_verification_failed");
         return res.status(400).json({ message: "Email and verification code are required." });
       }
 
       if (!/^\d{6}$/.test(code)) {
+        await logLoginAudit(req, "email_verification_failed");
         return res.status(400).json({ message: "Verification code must be a 6-digit number." });
       }
 
@@ -434,12 +462,14 @@ export function createAuthRouter(): Router {
         .limit(1);
 
       if (!user) {
+        await logLoginAudit(req, "email_verification_failed");
         return res.status(404).json({ message: "User not found." });
       }
 
       // If already verified, return success
       if (user.emailVerified) {
         await establishAuthenticatedSession(req, { id: user.id, email: user.email, name: user.fullName });
+        await logLoginAudit(req, "success", user.id);
         return res.json({ success: true, message: "Email already verified." });
       }
 
@@ -458,6 +488,7 @@ export function createAuthRouter(): Router {
         .limit(1);
 
       if (!token) {
+        await logLoginAudit(req, "email_verification_failed", user.id);
         return res.status(400).json({
           message: "No valid verification code found. Please request a new code.",
         });
@@ -472,6 +503,7 @@ export function createAuthRouter(): Router {
           .set({ used: true })
           .where(eq(emailVerificationTokens.id, token.id));
 
+        await logLoginAudit(req, "email_verification_failed", user.id);
         return res.status(429).json({
           message: "Too many failed attempts. Please request a new verification code.",
         });
@@ -486,6 +518,7 @@ export function createAuthRouter(): Router {
           .where(eq(emailVerificationTokens.id, token.id));
 
         const remaining = maxAttempts - (token.attemptCount ?? 0) - 1;
+        await logLoginAudit(req, "email_verification_failed", user.id);
         return res.status(401).json({
           message: `Invalid code. ${remaining > 0 ? `${remaining} attempt(s) remaining.` : "Please request a new code."}`,
         });
@@ -503,6 +536,7 @@ export function createAuthRouter(): Router {
         .where(eq(users.id, user.id));
 
       await establishAuthenticatedSession(req, { id: user.id, email: user.email, name: user.fullName });
+      await logLoginAudit(req, "success", user.id);
 
       return res.json({ success: true, message: "Email verified successfully." });
     } catch (err) {
