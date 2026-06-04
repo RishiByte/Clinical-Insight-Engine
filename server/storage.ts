@@ -1,4 +1,6 @@
 import { getDb } from "./db";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+
 import {
   assessments,
   users,
@@ -6,14 +8,14 @@ import {
   type InsertAssessment,
   type AssessmentFactor,
   type User,
-  type InsertUser
+  type InsertUser,
 } from "@shared/schema";
-import { desc, eq, ilike, and, or } from "drizzle-orm";
 import type { RiskCategory } from "./validation/searchValidation";
 
 export interface IStorage {
-  getAssessments(limit?: number, offset?: number, createdBy?: string): Promise<Assessment[]>;
-  /**
+  getAssessments(limit?: number, offset?: number, createdBy?: string): Promise<{ data: Assessment[]; total: number; page: number; totalPages: number }>;
+  createAssessment(assessment: AssessmentCreateInput): Promise<Assessment>;
+ /**
    * Searches assessments by risk category label using parameterized queries.
    * Uses Drizzle ORM eq() — user input is NEVER interpolated into SQL strings.
    */
@@ -46,13 +48,27 @@ export type AssessmentCreateInput = InsertAssessment & {
 
 export class DatabaseStorage implements IStorage {
   async getAssessments(
-    limit: number = 50,
+    limit: number = 20,
     offset: number = 0,
     createdBy?: string
-  ): Promise<Assessment[]> {
+  ): Promise<{ data: Assessment[]; total: number; page: number; totalPages: number }> {
     const db = getDb();
 
-    const conditions: ReturnType<typeof eq>[] = [];
+    // Compatibility: allow running even if the assessments table doesn't have created_by.
+    // Keep createdBy arg unused for now.
+    void createdBy;
+
+    const filters: ReturnType<typeof eq>[] = [];
+
+    // Filter by createdBy when provided to ensure users only see their own assessments
+    if (createdBy) {
+      const createdByCol = (assessments as any).createdBy ?? (assessments as any).created_by;
+      if (createdByCol) {
+        filters.push(eq(createdByCol, createdBy));
+      }
+    }
+
+
 
     if (createdBy) {
       conditions.push(eq(assessments.createdBy, createdBy));
@@ -73,21 +89,38 @@ export class DatabaseStorage implements IStorage {
         riskScore: assessments.riskScore,
         riskCategory: assessments.riskCategory,
         factors: assessments.factors,
-        confidenceInterval: assessments.confidenceInterval,
-        modelConfidence: assessments.modelConfidence,
-        createdAt: assessments.createdAt,
-        createdBy: assessments.createdBy,
-        userId: assessments.userId,
+        confidenceInterval:
+          (assessments as any).confidenceInterval ?? (assessments as any).confidence_interval,
+        modelConfidence:
+          (assessments as any).modelConfidence ?? (assessments as any).model_confidence,
+        createdBy:
+          (assessments as any).createdBy ?? (assessments as any).created_by,
+        createdAt:
+          (assessments as any).createdAt ?? (assessments as any).created_at,
+        userId:
+          (assessments as any).userId ?? (assessments as any).user_id,
       })
       .from(assessments)
       .orderBy(desc(assessments.createdAt))
       .$dynamic();
 
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
 
-    return await query.limit(limit).offset(offset);
+
+
+
+    const db2 = getDb();
+    const countResult = await db2.select({ count: sql<number>`count(*)` }).from(assessments);
+    const total = Number(countResult[0].count);
+    const page = Math.floor(offset / limit) + 1;
+    const totalPages = Math.ceil(total / limit);
+
+    let data: Assessment[];
+    if (filters.length > 0) {
+      data = await query.where(and(...filters)).limit(limit).offset(offset);
+    } else {
+      data = await query.limit(limit).offset(offset);
+    }
+    return { data, total, page, totalPages };
   }
 
   /**
