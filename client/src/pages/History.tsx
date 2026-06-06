@@ -56,6 +56,8 @@ function HighlightText({ text, search }: { text: string; search: string }) {
   );
 }
 
+const PAGE_SIZE = 10;
+
 export default function History() {
   useEffect(() => {
     document.title = "Clinical Insight Engine - Assessment History";
@@ -68,6 +70,7 @@ export default function History() {
   const assessments = infiniteData ? infiniteData.pages.flatMap((page) => page.data) : [];
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState<string>("date-desc");
+  const [currentPage, setCurrentPage] = useState(1);
 
   // New filter state
   const [riskCategory, setRiskCategory] = useState<RiskCategoryFilterValue>("All");
@@ -122,6 +125,7 @@ export default function History() {
     setMaxAge(undefined);
     setStartDate("");
     setEndDate("");
+    setCurrentPage(1);
   };
 
   const selectedPatientHistory = useMemo(() => {
@@ -396,10 +400,20 @@ export default function History() {
     return calculateHealthBadges(sortedHistory[0], sortedHistory);
   }, [selectedPatientHistory]);
 
+  // Reset to first page when filters or sort change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, riskCategory, gender, minAge, maxAge, startDate, endDate, sortBy]);
+
   // 4. Pagination
   const totalRecords = assessments.length;
   const filteredRecords = sortedAssessments.length;
-  const paginatedAssessments = sortedAssessments;
+  const totalPages = Math.max(1, Math.ceil(filteredRecords / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedAssessments = sortedAssessments.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
 
   const formatAssessmentDate = (dateVal: any) => {
     if (!dateVal) return "Unknown";
@@ -703,16 +717,42 @@ export default function History() {
               <div className="text-sm text-muted-foreground font-medium">
                 Showing{" "}
                 <span className="font-semibold text-foreground">
-                  {totalRecords === 0 ? 0 : 1}
+                  {filteredRecords === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1}
                 </span>{" "}
                 to{" "}
                 <span className="font-semibold text-foreground">
-                  {totalRecords}
+                  {Math.min(safePage * PAGE_SIZE, filteredRecords)}
                 </span>{" "}
-                records on this page
+                of{" "}
+                <span className="font-semibold text-foreground">
+                  {filteredRecords}
+                </span>{" "}
+                filtered records (page {safePage} of {totalPages})
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  className="inline-flex items-center justify-center p-2 px-3 rounded-xl border border-border bg-card text-foreground hover:bg-muted disabled:opacity-30 transition-colors shadow-sm cursor-pointer font-bold text-sm"
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  Prev
+                </button>
+                <span className="text-sm text-muted-foreground font-medium px-2">
+                  {safePage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  disabled={safePage >= totalPages}
+                  className="inline-flex items-center justify-center p-2 px-3 rounded-xl border border-border bg-card text-foreground hover:bg-muted disabled:opacity-30 transition-colors shadow-sm cursor-pointer font-bold text-sm"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </button>
+
                 {hasNextPage && (
                   <button
                     type="button"
@@ -727,7 +767,6 @@ export default function History() {
                     )}
                   </button>
                 )}
-
               </div>
             </div>
           </div>
