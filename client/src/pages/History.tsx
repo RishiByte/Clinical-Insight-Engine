@@ -34,7 +34,6 @@ import { AssessmentSearchBar } from "@/components/AssessmentSearchBar";
 import { AssessmentFilters } from "@/components/AssessmentFilters";
 import { ActiveFilterChips } from "@/components/ActiveFilterChips";
 import { ClearFiltersButton } from "@/components/ClearFiltersButton";
-import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import { validateSearchInput } from "@/validation/filterValidation";
 import AssessmentComparisonCard from "@/components/AssessmentComparisonCard";
 import { downloadPatientSummaryPdf } from "@/utils/clinicalPdfReport";
@@ -96,7 +95,7 @@ export default function History() {
     return [fieldMap[parts[0]] || "createdAt", parts[1] || "desc"];
   }, [sortBy]);
 
-  // Filter state
+  // New filter state
   const [riskCategory, setRiskCategory] = useState<RiskCategoryFilterValue>("All");
   const [gender, setGender] = useState<GenderFilterValue>("All");
   const [minAge, setMinAge] = useState<number | undefined>(undefined);
@@ -511,6 +510,14 @@ export default function History() {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, riskCategory, gender, minAge, maxAge, startDate, endDate, sortBy]);
+
+  // 4. Pagination (Server-Side)
+  const totalRecords = assessmentsData?.total ?? 0;
+  const filteredRecords = assessmentsData?.total ?? 0;
+  const totalPages = assessmentsData?.totalPages ?? 1;
+  const safePage = currentPage;
+  const sortedAssessments = assessments;
+  const paginatedAssessments = assessments;
 
   const formatAssessmentDate = (dateVal: any) => {
     if (!dateVal) return "Unknown";
@@ -1086,7 +1093,7 @@ export default function History() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {sortedSelectedPatientHistory.map((a) => (
+{sortedSelectedPatientHistory.map((a) => (
                       <tr key={a.id} className="hover:bg-muted/30 transition-colors">
                         <td className="p-3 whitespace-nowrap">{formatAssessmentDate(a.createdAt)}</td>
                         <td className="p-3 font-bold text-foreground">{Number(a.riskScore).toFixed(1)}%</td>
