@@ -1,5 +1,5 @@
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type AssessmentInput, type AssessmentResponse, type AssessmentsListResponse } from "@shared/routes";
+import { api, type AssessmentInput, type AssessmentResponse, type AssessmentSimulationResponse, type AssessmentWhatIfResponse, type AssessmentWhatIfBatchResponse, type AssessmentsListResponse } from "@shared/routes";
 import { useToast } from "./use-toast";
 
 // Parse with logging to catch silent Zod JSON translation errors
@@ -118,18 +118,57 @@ export function useClearPatientCache() {
   };
 }
 
+export function useDeleteAssessment() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/assessments/${id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        let errorData;
+        try {
+          errorData = await res.json();
+        } catch {
+          throw new Error("Failed to delete assessment");
+        }
+        throw new Error(errorData.message || "Failed to delete assessment");
+      }
+      return true;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["assessments"] });
+      queryClient.invalidateQueries({ queryKey: ["assessments-patient"] });
+      toast({
+        title: "Assessment deleted",
+        description: "The assessment has been successfully removed.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Deletion failed",
+        description: error.message || "An unexpected error occurred while deleting.",
+        variant: "destructive",
+      });
+    },
+  });
+}
 export function useCreateAssessment() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  
+
   return useMutation({
     mutationFn: async (data: AssessmentInput) => {
       // Ensure numeric fields are coerced correctly before sending if needed
       const validated = api.assessments.create.input.parse(data);
-      
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 75000); // 75s overall timeout
-      
+
       try {
         const res = await fetch(api.assessments.create.path, {
           method: api.assessments.create.method,
@@ -215,6 +254,109 @@ export function useCreateAssessment() {
           : error.message || "An unexpected error occurred during the assessment.",
         variant: "destructive",
       });
+    },
+  });
+}
+
+export function useSimulateAssessment() {
+  return useMutation({
+    mutationFn: async (data: AssessmentInput) => {
+      const validated = api.assessments.simulate.input.parse(data);
+      const res = await fetch(api.assessments.simulate.path, {
+        method: api.assessments.simulate.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.message || "Failed to simulate assessment");
+      }
+
+      const responseData = await res.json();
+      return parseWithLogging<AssessmentSimulationResponse>(
+        api.assessments.simulate.responses[200],
+        responseData,
+        "assessments.simulate"
+      );
+    },
+  });
+}
+
+export function useWhatIfAssessment() {
+  return useMutation({
+    mutationFn: async (data: AssessmentInput) => {
+      const validated = api.assessments.whatIf.input.parse(data);
+      const res = await fetch(api.assessments.whatIf.path, {
+        method: api.assessments.whatIf.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.message || "Failed to run what-if analysis");
+      }
+
+      const responseData = await res.json();
+      return parseWithLogging<AssessmentWhatIfResponse>(
+        api.assessments.whatIf.responses[200],
+        responseData,
+        "assessments.whatIf"
+      );
+    },
+  });
+}
+
+export function useWhatIfBatch() {
+  return useMutation({
+    mutationFn: async (data: {
+      original: AssessmentInput;
+      perturbations: Record<string, string | number | boolean>[];
+    }) => {
+      const validated = api.assessments.whatIfBatch.input.parse(data);
+      const res = await fetch(api.assessments.whatIfBatch.path, {
+        method: api.assessments.whatIfBatch.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.message || "Failed to run batch what-if analysis");
+      }
+
+      const responseData = await res.json();
+      return parseWithLogging<AssessmentWhatIfBatchResponse>(
+        api.assessments.whatIfBatch.responses[200],
+        responseData,
+        "assessments.whatIfBatch"
+      );
+    },
+  });
+}
+
+export function useWhatIfAuto() {
+  return useMutation({
+    mutationFn: async (data: AssessmentInput) => {
+      // Validate input using the base create schema
+      const validated = api.assessments.create.input.parse(data);
+      const res = await fetch("/api/assessments/what-if/auto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.message || "Failed to run auto what-if analysis");
+      }
+
+      return await res.json();
     },
   });
 }
