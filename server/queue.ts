@@ -11,6 +11,7 @@ import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { sendCriticalRiskAlert } from "./email";
 import { logger } from "./logger";
+import { generatePredictionExplanation } from "./services/prediction-explainer";
 
 export function getPythonExecutable() {
   const candidates = process.platform === "win32"
@@ -160,6 +161,12 @@ export function startAssessmentWorker(): void {
           userId: userId
         });
 
+        const explanation = generatePredictionExplanation({
+          ...input,
+          riskCategory: prediction.riskCategory,
+          factors: prediction.factors,
+        });
+
         if (prediction.riskCategory === "HIGH" && userEmail) {
           const alertSent = await sendCriticalRiskAlert(
             userEmail,
@@ -177,7 +184,8 @@ export function startAssessmentWorker(): void {
 
         return {
           ...assessment,
-          prediction
+          prediction,
+          explanation,
         };
       } catch (err: any) {
         if (err.killed || err.signal === "SIGTERM") {
