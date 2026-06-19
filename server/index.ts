@@ -33,6 +33,8 @@ import { generalLimiter } from "./middleware/rateLimit";
 import { registerOpenApiDocs } from "./openapi";
 import { initAssessmentSocket } from "./socket/assessmentSocket";
 import { rlsContextMiddleware } from "./middleware/rlsContext";
+import { runDataRetentionSweep } from "./services/data-retention-sweeper";
+
 
 
 const app = express();
@@ -261,6 +263,30 @@ registerOpenApiDocs(app);
     .catch((err: unknown) => logger.warn({ source: "ml" }, `ML warmup warning: ${(err as Error).message}`));
   initAssessmentSocket(httpServer);
   await registerRoutes(httpServer, app);
+
+  // Start the daily data retention sweep
+  const sweepIntervalMs = 24 * 60 * 60 * 1000; // 24 hours
+  setInterval(async () => {
+    try {
+      const dryRun = process.env.DRY_RUN === "true";
+      const results = await runDataRetentionSweep(dryRun);
+      logger.info(results, "Data retention policy sweep completed successfully");
+    } catch (err) {
+      logger.error({ err }, "Data retention policy sweep failed");
+    }
+  }, sweepIntervalMs).unref();
+
+  // Also trigger once on startup after database is connected
+  setTimeout(async () => {
+    try {
+      const dryRun = process.env.DRY_RUN === "true";
+      const results = await runDataRetentionSweep(dryRun);
+      logger.info(results, "Initial data retention policy sweep completed successfully");
+    } catch (err) {
+      logger.error({ err }, "Initial data retention policy sweep failed");
+    }
+  }, 5000).unref(); // Run 5 seconds after startup
+
 
   // Global error handler — must be the LAST middleware.
   // Handles CORS errors, database errors, unhandled exceptions, and returns
