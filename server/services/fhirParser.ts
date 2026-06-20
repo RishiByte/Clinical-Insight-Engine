@@ -523,7 +523,7 @@ export function convertToInternalSchema(structure: NormalizedFhirStructure): Ins
   try {
     return insertAssessmentSchema.parse(assessment);
   } catch (err: any) {
-    logger.error({ err }, `Failed to parse file: ${err.message}`);
+    console.error({ err }, `Failed to parse file: ${err.message}`);
     if (err.errors && err.errors.length > 0) {
       throw new Error(err.errors[0].message);
     }
