@@ -1,0 +1,34 @@
+client/src/components/auth/AuthFlow.tsx(94,23): error TS18046: 'err' is of type 'unknown'.
+client/src/components/ui/form.tsx(150,32): error TS2352: Conversion of type 'FieldError' to type 'Error' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'name' is missing in type 'FieldError' but required in type 'Error'.
+client/src/lib/queryClient.ts(31,52): error TS18046: 'error' is of type 'unknown'.
+client/src/pages/Dashboard.tsx(305,17): error TS2322: Type 'unknown' is not assignable to type 'string | number | boolean | ReactElement<any, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | null | undefined'.
+server/auth.ts(25,5): error TS2687: All declarations of 'user' must have identical modifiers.
+server/db.ts(42,22): error TS2339: Property 'code' does not exist on type '{}'.
+server/index.ts(135,60): error TS2304: Cannot find name 'RequestHandler'.
+server/index.ts(135,96): error TS2304: Cannot find name 'RequestHandler'.
+server/index.ts(137,31): error TS2304: Cannot find name 'RequestHandler'.
+server/index.ts(137,64): error TS18046: 'res' is of type 'unknown'.
+server/middleware/rlsContext.ts(90,24): error TS2339: Property 'userId' does not exist on type 'User'.
+server/middleware/rlsContext.ts(91,23): error TS2339: Property 'email' does not exist on type 'User'.
+server/middleware/rlsContext.ts(92,22): error TS2339: Property 'role' does not exist on type 'User'.
+server/middleware/validateDTO.ts(18,23): error TS2352: Conversion of type 'ZodIssue' to type 'Error' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'name' is missing in type 'ZodCustomIssue & { fatal?: boolean | undefined; message: string; }' but required in type 'Error'.
+server/middleware/validateDTO.ts(40,23): error TS2352: Conversion of type 'ZodIssue' to type 'Error' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'name' is missing in type 'ZodCustomIssue & { fatal?: boolean | undefined; message: string; }' but required in type 'Error'.
+server/queue.ts(109,7): error TS2322: Type 'unknown' is not assignable to type 'ConnectionOptions'.
+server/queue.ts(277,11): error TS18046: 'err' is of type 'unknown'.
+server/queue.ts(278,11): error TS18046: 'err' is of type 'unknown'.
+server/queue.ts(288,7): error TS2322: Type 'unknown' is not assignable to type 'ConnectionOptions'.
+server/routes.ts(446,37): error TS2345: Argument of type '{ id: string; email: string; name: string; role?: string | null | undefined; emailVerified: boolean; }' is not assignable to parameter of type 'Pick<{ id: string; role: string | null; createdAt: Date; fullName: string; email: string; medicalLicenseNumber: string; passwordHash: string; isActive: boolean | null; emailVerified: boolean | null; emailVerifiedAt: Date | null; updatedAt: Date; }, "id" | ... 1 more ... | "email">'.
+  Types of property 'role' are incompatible.
+    Type 'string | null | undefined' is not assignable to type 'string | null'.
+      Type 'undefined' is not assignable to type 'string | null'.
+server/routes.ts(610,39): error TS18046: 'err' is of type 'unknown'.
+server/routes/assessments.routes.ts(122,56): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ gender: "Male" | "Female"; age: number; hypertension: boolean; heartDisease: boolean; smokingHistory: "current" | "never" | "No Info" | "former"; bmi: number; hba1cLevel: number; bloodGlucoseLevel: number; ... 4 more ...; explainableInsights?: { ...; }[] | ... 1 more ... | undefined; }'.
+  No index signature with a parameter of type 'string' was found on type '{ gender: "Male" | "Female"; age: number; hypertension: boolean; heartDisease: boolean; smokingHistory: "current" | "never" | "No Info" | "former"; bmi: number; hba1cLevel: number; bloodGlucoseLevel: number; ... 4 more ...; explainableInsights?: { ...; }[] | ... 1 more ... | undefined; }'.
+server/routes/assessments.routes.ts(312,11): error TS2769: No overload matches this call.
+  Overload 1 of 3, '(obj: "Python prediction simulation failed, falling back to clinical rule-based model:", msg?: undefined): void', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type 'undefined'.
+  Overload 2 of 3, '(obj: "Python prediction simulation failed, falling back to clinical rule-based model:", msg?: undefined, ...args: unknown[]): void', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type 'undefined'.
