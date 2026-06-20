@@ -290,8 +290,6 @@ export async function registerRoutes(
     }
   );
 
-  app.post(
-    "/api/assessments/bulk",
   app.get(
     "/api/queue/health",
     requireAuth,
