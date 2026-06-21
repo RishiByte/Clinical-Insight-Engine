@@ -97,6 +97,7 @@ export interface IStorage {
     assessments: any[];
     summary: { total: number; latestRiskScore: number | null; latestRiskCategory: string | null; earliestRiskScore: number | null; trend: string; avgRiskScore: number; change: number };
   }>;
+  createAssessmentsBatch(data: AssessmentCreateInput[]): Promise<Assessment[]>;
 }
 
 export type AssessmentCreateInput = InsertAssessment & {
@@ -176,6 +177,10 @@ export class DatabaseStorage implements IStorage {
 
   async deleteAssessment(id: number) {
     return this.assessmentRepository.deleteAssessment(id);
+  }
+
+  async createAssessmentsBatch(data: AssessmentCreateInput[]) {
+    return this.assessmentRepository.createAssessmentsBatch(data);
   }
 
   async autocompletePatientNames(query: string, createdBy?: string, limit?: number) {

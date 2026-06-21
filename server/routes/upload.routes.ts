@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "path";
 import { requireAuth, requireVerified } from "../auth";
 import Papa from "papaparse";
-import { insertAssessmentSchema } from "@shared/schema";
+import { insertAssessmentSchema, type InsertAssessment } from "@shared/schema";
 import { MLService } from "../services/mlService";
 import { storage } from "../storage";
 import { logger } from "../logger";
@@ -56,16 +56,15 @@ uploadRouter.post(
         const csvString = file.buffer.toString("utf-8");
         const parsed = Papa.parse(csvString, { header: true, skipEmptyLines: true });
         
+        // Phase 1: Validate all rows and collect predictions
+        const validRows: { rowData: InsertAssessment; prediction: any }[] = [];
         let processed = 0;
-        let created = 0;
         let failed = 0;
 
-        // Process rows sequentially to avoid overwhelming the ML service or DB
         for (const row of parsed.data as Record<string, unknown>[]) {
           processed++;
           
           try {
-            // Pre-process boolean fields
             const hypertensionVal = String(row.hypertension).toLowerCase();
             const heartDiseaseVal = String(row.heartDisease).toLowerCase();
             
@@ -83,22 +82,28 @@ uploadRouter.post(
 
             const validData = parseResult.data;
             const { prediction } = await MLService.runAssessmentInference(validData);
+            validRows.push({ rowData: validData, prediction });
+          } catch (rowErr) {
+            logger.error({ err: rowErr, row }, "Error processing CSV row");
+            failed++;
+          }
+        }
 
-            await storage.createAssessment({
-              ...validData,
+        // Phase 2: Insert all valid assessments in a single transaction
+        let created = 0;
+        if (validRows.length > 0) {
+          const createdAssessments = await storage.createAssessmentsBatch(
+            validRows.map(({ rowData, prediction }) => ({
+              ...rowData,
               riskScore: prediction.riskScore,
               riskCategory: prediction.riskCategory,
               factors: prediction.factors,
               confidenceInterval: prediction.confidenceInterval,
               modelConfidence: prediction.modelConfidence,
-              createdBy
-            });
-            
-            created++;
-          } catch (rowErr) {
-            logger.error({ err: rowErr, row }, "Error processing CSV row");
-            failed++;
-          }
+              createdBy,
+            }))
+          );
+          created = createdAssessments.length;
         }
 
         return res.status(200).json({

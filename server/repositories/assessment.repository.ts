@@ -475,6 +475,13 @@ export class AssessmentRepository {
     };
   }
 
+  async createAssessmentsBatch(data: AssessmentCreateInput[]): Promise<Assessment[]> {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+      return tx.insert(assessments).values(data as any).returning();
+    });
+  }
+
   async deleteAssessment(id: number): Promise<void> {
     const db = getDb();
     await db.delete(assessments).where(eq(assessments.id, id));
