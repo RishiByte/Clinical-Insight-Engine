@@ -17,9 +17,8 @@ import {
   adminLimiter,
   exportLimiter,
 } from "./middleware/rateLimit";
-import { rateLimit } from "express-rate-limit";
 import { MLService, calculateClinicalFallback, generateRequestFingerprint, type PredictionResult } from "./services/mlService";
-import { getAssessmentQueue, getPythonExecutable, getQueueMetrics } from "./queue";
+import { getPythonExecutable } from "./queue";
 import { execFile } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -29,12 +28,8 @@ import { z } from "zod";
 import os from "os";
 import { randomUUID } from "crypto";
 import { writeFile, unlink } from "fs/promises";
-import { validateDTO } from "./middleware/validateDTO";
 import { assessmentsToCsv } from "./utils/csvExport";
-import { searchQuerySchema, assessmentExportQuerySchema } from "./validation/searchValidation";
-import { analyzeSearchInput, logSecurityEvent, sanitizeDatabaseError } from "./security/sqlProtection";
-import { canAccessPatientRecord } from "./services/authz/patient-access";
-import { logAccessAttempt } from "./security/access-audit";
+import { assessmentExportQuerySchema } from "./validation/searchValidation";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -147,25 +142,6 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  const previewLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    limit: 10,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    message: { error: "Too many preview requests. Please try again later.", retryAfter: 60 },
-  });
-
-  const assessmentLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    limit: 5,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    message: {
-      error: "Too many assessment requests. Please try again later.",
-      retryAfter: 60,
-    },
-  });
-
   // Support test compatibility — some tests reference lastStatus globally
   app.use((req, res, next) => {
     res.on("finish", () => {
@@ -214,13 +190,13 @@ export async function registerRoutes(
           confidenceInterval: prediction.confidenceInterval ?? null,
           modelConfidence: prediction.modelConfidence ?? null
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (err instanceof z.ZodError) {
           return res.status(400).json({
             message: err.errors[0].message
           });
         }
-        if (err.message?.includes("timed out")) {
+        if ((err as Error).message?.includes("timed out")) {
           return res.status(503).json({
             message: "Clinical assessment preview timed out."
           });
@@ -231,83 +207,11 @@ export async function registerRoutes(
     }
   );
 
-  app.post(
-    api.assessments.simulate.path,
+  app.get(
+    "/api/queue/health",
     requireAuth,
-    requireVerified,
-    previewLimiter,
-    validateDTO(api.assessments.simulate.input),
-    async (req, res) => {
-      const input = api.assessments.simulate.input.parse(req.body);
-      const tempFile = path.join(os.tmpdir(), `${randomUUID()}.json`);
-
-      try {
-        await writeFile(tempFile, JSON.stringify(input));
-
-        let prediction: any;
-        try {
-          const { stdout } = await execFileAsync(
-            getPythonExecutable(),
-            [analyzePyPath, "predict_file", tempFile],
-            { timeout: 30000 }
-          );
-
-          prediction = JSON.parse(stdout.trim());
-          if (prediction.error) {
-            return res.status(400).json({ message: prediction.error });
-          }
-        } catch (error: any) {
-          if (error.killed || error.signal === "SIGTERM") {
-            return res.status(408).json({ message: "Clinical assessment simulation timed out." });
-          }
-
-          logger.warn(
-            "Python prediction simulation failed, falling back to clinical rule-based model:",
-            error
-          );
-          prediction = calculateClinicalFallback(input);
-        }
-
-        logger.info(
-          `[AUDIT] simulate requested by=${req.session.user?.email} riskCategory=${prediction.riskCategory} riskScore=${prediction.riskScore} at=${new Date().toISOString()}`
-        );
-
-        return res.json({
-          simulatedRisk: prediction.riskScore,
-          riskCategory: prediction.riskCategory,
-          confidence: prediction.modelConfidence ?? null,
-          factorContributions: prediction.factors ?? [],
-        });
-      } catch (err) {
-        if (err instanceof z.ZodError) {
-          return res.status(400).json({ message: err.errors[0].message });
-        }
-        logger.error({ err }, "Error creating assessment simulation");
-        return res.status(500).json({ message: "Internal server error" });
-      } finally {
-        try {
-          await unlink(tempFile);
-        } catch (e) {
-          logger.warn({ e, tempFile }, "Failed to clean up temp file (simulate):");
-        }
-      }
-    }
-  );
-
-  app.post(
-    "/api/assessments/bulk",
-    requireAuth,
-    requireVerified,
-    async (req, res) => {
-      const userId = (req.session.user as any)?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Authentication required." });
-      }
-
-      const inputSchema = z.array(api.assessments.create.input);
-      let tempFilePath: string | null = null;
-      let requestFingerprint: string | null = null;
-
+    requireAdmin,
+    async (_req, res) => {
       try {
         const input = inputSchema.parse(req.body.assessments);
         
@@ -336,10 +240,10 @@ export async function registerRoutes(
           predictions = calculateClinicalFallback(input) as PredictionResult[];
         }
 
-        const createdAssessments = await Promise.all(
+        const createdAssessments = await storage.createAssessmentsBatch(
           input.map((assessment, index) => {
             const prediction = predictions[index];
-            return storage.createAssessment({
+            return {
               ...assessment,
               riskScore: Number(prediction.riskScore),
               riskCategory: prediction.riskCategory,
@@ -347,28 +251,19 @@ export async function registerRoutes(
               confidenceInterval: prediction.confidenceInterval ?? null,
               modelConfidence: prediction.modelConfidence == null ? undefined : Number(prediction.modelConfidence),
               createdBy: userId,
-            });
+            };
           })
         );
 
         return res.status(201).json({ count: createdAssessments.length, assessments: createdAssessments });
+        const metrics = await getQueueMetrics();
+        res.json(metrics);
       } catch (err) {
-        if (err instanceof z.ZodError) {
-          return res.status(400).json({ message: "Invalid bulk input data format. Ensure all rows meet schema requirements." });
-        }
-        logger.error({ err }, "Bulk create error:");
-        return res.status(500).json({ message: "Failed to generate bulk assessments." });
-      } finally {
-        if (tempFilePath) {
-          try { await unlink(tempFilePath); } catch {}
-        }
-        if (requestFingerprint) {
-          MLService.activeInferenceRequests.delete(requestFingerprint);
-        }
+        logger.error({ err }, "Error fetching queue health");
+        res.status(500).json({ message: "Failed to fetch queue health" });
       }
     }
   );
-
   app.get(api.assessments.list.path, requireAuth, requireVerified, async (req, res) => {
     try {
       const userEmail = req.session.user?.email;
@@ -492,7 +387,7 @@ export async function registerRoutes(
       try {
         const patientName = Array.isArray(req.params.patientName) ? req.params.patientName[0] : req.params.patientName;
         const userEmail = req.session.user?.email;
-        const result = await storage.getAssessmentsByPatientName(patientName, 100, 0);
+        const result = await storage.getAssessmentsByPatientName(patientName, 100, 0, userEmail);
         return res.json(result);
       } catch (err) {
         logger.error({ err }, "Patient trends fetch error:");
@@ -571,7 +466,7 @@ export async function registerRoutes(
         }
 
         // Object-Level Authorization Check
-        if (!canAccessPatientRecord(user as any, assessment)) {
+        if (!canAccessPatientRecord(user, assessment)) {
           // Log unauthorized access attempt (IDOR/Enumeration attempt)
           logAccessAttempt(
             user.id,
@@ -733,9 +628,9 @@ export async function registerRoutes(
 
       logger.info(`Model retrained: version ${nextVersion}, accuracy ${metrics.accuracy}`);
       res.json(record);
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error({ err }, "Admin model retrain error:");
-      res.status(500).json({ message: err.stderr || "Model retraining failed." });
+      res.status(500).json({ message: (err as { stderr?: string }).stderr || "Model retraining failed." });
     }
   });
 

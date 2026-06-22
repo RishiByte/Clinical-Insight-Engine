@@ -8,6 +8,7 @@ import { previewLimiter, assessmentLimiter } from "../middleware/rateLimit";
 import { api } from "@shared/routes";
 import { storage } from "../storage";
 import { MLService, isPythonAvailable, calculateClinicalFallback, type PredictionResult } from "../services/mlService";
+import { sanitizeHtml } from "../utils/sanitize";
 
 
 import { generateRecommendations } from "../services/recommendation-engine";
@@ -23,23 +24,7 @@ import { searchQuerySchema, assessmentsQuerySchema, cohortQuerySchema } from "..
 import { canAccessPatientRecord } from "../services/authz/patient-access";
 import { logAccessAttempt } from "../security/access-audit";
 import { validateDTO } from "../middleware/validateDTO";
-import { existsSync } from "fs";
-import { execFile } from "child_process";
-import { fileURLToPath } from "url";
-import path from "path";
-import os from "os";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const analyzePyPath = path.resolve(__dirname, "..", "..", "analyze.py");
-
-function getPythonExecutable() {
-  const candidates =
-    process.platform === "win32"
-      ? [ path.resolve(".venv", "Scripts", "python.exe"), path.resolve("venv", "Scripts", "python.exe") ]
-      : [ path.resolve(".venv", "bin", "python"), path.resolve("venv", "bin", "python") ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? (process.platform === "win32" ? "python" : "python3");
-}
+import { requireAssessmentAccess } from "../middleware/requireAssessmentAccess";
 
 const assessmentsRouter = Router();
 
@@ -64,16 +49,16 @@ assessmentsRouter.post(
         modelConfidence: prediction.modelConfidence ?? null,
         isFallback,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res
           .status(400)
           .json({ message: err.errors[0]?.message ?? "Invalid input" });
       }
-      if (err.message === "Clinical assessment timed out." || err.message.includes("timed out")) {
+      if ((err as Error).message === "Clinical assessment timed out." || (err as Error).message.includes("timed out")) {
         return res.status(503).json({ message: "Clinical assessment preview timed out." });
       }
-      return res.status(500).json({ message: err.message || "Internal server error" });
+      return res.status(500).json({ message: (err as Error).message || "Internal server error" });
     }
   }
 );
@@ -97,14 +82,14 @@ assessmentsRouter.post(
         modelConfidence: prediction.modelConfidence ?? null,
         isFallback,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid input" });
       }
-      if (err.message === "Clinical assessment timed out." || err.message.includes("timed out")) {
+      if ((err as Error).message === "Clinical assessment timed out." || (err as Error).message.includes("timed out")) {
         return res.status(503).json({ message: "What-if assessment timed out." });
       }
-      return res.status(500).json({ message: err.message || "Internal server error" });
+      return res.status(500).json({ message: (err as Error).message || "Internal server error" });
     }
   }
 );
@@ -173,7 +158,7 @@ assessmentsRouter.post(
       }
 
       return res.json(result);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid input" });
       }
@@ -221,7 +206,7 @@ assessmentsRouter.post(
       }
 
       return res.json(result);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid input" });
       }
@@ -238,7 +223,7 @@ assessmentsRouter.post(
   assessmentLimiter,
   validateDTO(api.assessments.create.input),
   async (req, res) => {
-    const userId = (req.session.user as any)?.id;
+    const userId = (req.session.user)?.id;
     const userEmail = req.session.user?.email;
     if (!userId) {
       return res.status(401).json({ message: "Authentication required." });
@@ -247,7 +232,7 @@ assessmentsRouter.post(
     let requestFingerprint: string | undefined;
     try {
       const input = req.body;
-      const requestId = (req as any).id as string | undefined;
+      const requestId = (req).id as string | undefined;
 
       requestFingerprint = MLService.generateRequestFingerprint(input, userId);
       if (MLService.activeInferenceRequests.has(requestFingerprint)) {
@@ -276,7 +261,7 @@ assessmentsRouter.post(
         jobId: job.id,
         requestId,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res
           .status(400)
@@ -308,14 +293,14 @@ assessmentsRouter.post(
       try {
         const result = await MLService.runAssessmentInference(input);
         prediction = result.prediction;
-      } catch (error: any) {
-        if (error.message?.includes("timed out")) {
+      } catch (error: unknown) {
+        if ((error as Error).message?.includes("timed out")) {
           return res.status(408).json({ message: "Clinical assessment simulation timed out." });
         }
 
         logger.warn(
-          "Python prediction simulation failed, falling back to clinical rule-based model:",
-          error
+          { err: error },
+          "Python prediction simulation failed, falling back to clinical rule-based model:"
         );
         prediction = calculateClinicalFallback(input);
       }
@@ -330,7 +315,7 @@ assessmentsRouter.post(
         confidence: prediction.modelConfidence ?? null,
         factorContributions: prediction.factors ?? [],
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid input" });
       }
@@ -347,9 +332,10 @@ assessmentsRouter.get(
   async (req, res) => {
     try {
       const patientName = Array.isArray(req.params.patientName) ? req.params.patientName[0] : req.params.patientName;
+      const userEmail = req.session.user?.email;
       const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
       const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
-      const result = await storage.getAssessmentsByPatientName(patientName, 100, 0, startDate, endDate);
+      const result = await storage.getAssessmentsByPatientName(patientName, 100, 0, userEmail, startDate, endDate);
       return res.json(result);
     } catch (err) {
       logger.error({ err }, "Patient trends fetch error:");
@@ -469,18 +455,18 @@ assessmentsRouter.get(
           logSecurityEvent(
             "SQL_INJECTION_ATTEMPT",
             "Injection-like pattern detected in search query parameter",
-            req as any,
+            req,
             {
               matchedPattern: analysis.pattern,
-              userId: (req.session.user as any)?.id,
+              userId: (req.session.user)?.id,
             }
           );
         } else {
           logSecurityEvent(
             "MALFORMED_SEARCH_QUERY",
             "Search query failed validation",
-            req as any,
-            { userId: (req.session.user as any)?.id }
+            req,
+            { userId: (req.session.user)?.id }
           );
         }
 
@@ -501,10 +487,10 @@ assessmentsRouter.get(
           logSecurityEvent(
             "SUSPICIOUS_SEARCH_PATTERN",
             "Validated search term contains a suspicious pattern",
-            req as any,
+            req,
             {
               matchedPattern: analysis.pattern,
-              userId: (req.session.user as any)?.id,
+              userId: (req.session.user)?.id,
             }
           );
         }
@@ -566,6 +552,7 @@ assessmentsRouter.get(
   "/:id",
   requireAuth,
   requireVerified,
+  requireAssessmentAccess,
   async (req, res) => {
     try {
       const id = parseInt(req.params.id as string, 10);
@@ -618,14 +605,13 @@ assessmentsRouter.get(
   }
 );
 
-assessmentsRouter.delete(
-  "/:id",
+assessmentsRouter.patch(
+  "/:id/note",
   requireAuth,
   requireVerified,
   async (req, res) => {
     try {
       const id = parseInt(req.params.id as string, 10);
-
       if (isNaN(id) || id <= 0) {
         return res.status(400).json({ message: "Invalid assessment ID." });
       }
@@ -636,25 +622,57 @@ assessmentsRouter.delete(
       }
 
       const assessment = await storage.getAssessmentById(id);
-
       if (!assessment) {
         return res.status(404).json({ message: "Assessment not found." });
       }
 
-      if (!canAccessPatientRecord(user as any, assessment)) {
+      if (!canAccessPatientRecord(user, assessment)) {
         logAccessAttempt(
-          (user as any).id,
+          user.id,
           "Assessment",
           id,
           false,
-          "IDOR attempt: User not authorized to delete this patient record"
+          "IDOR attempt: User not authorized to edit notes on this patient record"
         );
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      await storage.deleteAssessment(id);
-      
-      logAccessAttempt((user as any).id, "Assessment", id, true, "Assessment deleted successfully");
+      const { clinicalNote } = req.body;
+      if (typeof clinicalNote !== "string") {
+        return res.status(400).json({ message: "clinicalNote must be a string." });
+      }
+
+      const sanitized = sanitizeHtml(clinicalNote);
+
+      const updated = await storage.updateClinicalNote(id, sanitized);
+      if (!updated) {
+        return res.status(500).json({ message: "Failed to update clinical note." });
+      }
+
+      logAccessAttempt(user.id, "Assessment", id, true, "Clinical note updated");
+      return res.json({ clinicalNote: updated.clinicalNote });
+    } catch (err) {
+      logger.error({ err }, "Clinical note update error:");
+      return res.status(500).json({ message: "Failed to update clinical note." });
+    }
+  }
+);
+
+assessmentsRouter.delete(
+  "/:id",
+  requireAuth,
+  requireVerified,
+  requireAssessmentAccess,
+  async (req, res) => {
+    try {
+      await storage.deleteAssessment(req.assessment.id);
+      logAccessAttempt(
+        (req.session.user as any)?.id,
+        "Assessment",
+        req.assessment.id,
+        true,
+        "Assessment deleted successfully"
+      );
       return res.status(204).send();
     } catch (err) {
       logger.error({ err }, "Assessment delete error:");
